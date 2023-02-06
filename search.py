@@ -2,24 +2,22 @@ from __future__ import annotations
 import heapq
 import sys
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from copy import deepcopy
 from a2 import StateRepresentation
 from typing import Any
-import itertools
 
 class Problem:
     """Abstract framework for problem formulation. Contains an initial state, 
     goal test function/goal states, available actions,transition model, and
     action cost function (see pg. 65 of txtbook)"""
-    def __init__(self, initial, goal=None, possible_actions=None):
+    def __init__(self, initial, goal=None):
         self.initial = initial
         self.goal = goal
-        self.possible_actions = possible_actions
 
     def actions(self, state):
         """Return the set of possible actions the agent can execute in the state."""
-        return self.possible_actions
+        raise NotImplementedError
 
     def result(self, state, action):
         """Return the resultant state produced by executing the given action in the given state."""
@@ -40,9 +38,10 @@ class VacuumWorld(Problem):
     """Defines the vacuum path planning problem for an agent in a 2d grid environment."""
 
     def __init__(self, initial, goal,world,heuristic):
-        super().__init__(initial,goal,world.possible_actions)
+        super().__init__(initial,goal)
         self.dimrow = world.dimrow
         self.dimcol = world.dimcol
+        self.possible_actions = world.possible_actions
         self.walls = world.obstacles
         self.chargers = world.chargers
         self.fuel_capacity = world.fuel_capacity
@@ -70,9 +69,8 @@ class VacuumWorld(Problem):
             valid_actions.remove('V')
         if self.fuel_capacity is not None and (row,col) not in self.chargers:
             valid_actions.remove('R')
-
+    
         return valid_actions
-
 
     def result(self, state, action):
         row, col = state.loc
@@ -244,10 +242,13 @@ class Node:
 
     #For easier debugging return node in string format
     def __repr__(self):
-        return "<Node {}>".format(self.state,self.parent,self.action,self.g,self.depth)
-
+        return "Node {}".format(self.state,self.parent,self.action,self.g,self.depth)
     
-    #Node equivalency based on states - used to avoid duplicate states/cycles
+    #Overload necessary operators s.t. we avoid duplicate states/cycles and the priority queue can order nodes
+    def __lt__(self, node):
+        return self.g < node.g
+    
+    #Node equivalency based on states
     def __eq__(self, other):
         return isinstance(other, Node) and self.state == other.state
 
@@ -308,26 +309,43 @@ def iterative_deepening_search(problem):
     depth = 0
     while True:
         if depth == 0:
-            #result = depth_limited_search(problem,depth,1,0)
             result = depth_limited_search(problem,depth,1)
         else:
             result = depth_limited_search(problem,depth,result[0])
-            #result = depth_limited_search(problem,depth,result[0],result[1])
         if result[2] != "cutoff":
                 return result
         depth += 1
 
-                   
+def depth_limited_search(problem,limit,ngen):
+    root = Node(problem.initial)
+    frontier = [root] 
+    path = set()
+    result = None
+    while frontier:
+        node = frontier.pop(0)
+        if problem.goal_test(node.state):
+            return ngen,len(path),node
+        if node.depth > limit:
+            result = "cutoff"
+            path.discard(node.state)
+        elif node.state not in path:
+            for child in node.expand(problem):
+                ngen += 1
+                frontier.insert(0,child)
+            path.add(node.state)
+        else:
+            path.discard(node.state)
+    return ngen,len(path),result
+
+"""  
 def depth_limited_search(problem,limit,ngen):
     root = Node(problem.initial)
     frontier = [root]
     path = set()
     result = None #Fails if no solution at any depth
-
     while frontier:
         node = frontier.pop(0)
         if problem.goal_test(node.state):
-            #return ngen,nexp+len(path),node #leave for now until "debate" settled about expanded node/space complexity
             return ngen,len(path),node
         if node.depth > limit:
             result = "cutoff"
@@ -336,10 +354,15 @@ def depth_limited_search(problem,limit,ngen):
                 frontier.insert(0,child)
                 ngen += 1
             path.add(node.state)
-    #return ngen,len(path)+nexp,result
+        else:
+            path.discard(node.state)
+
     return ngen,len(path),result
+"""
+
 
 #A* search
+#Ties in f-cost could/should be broken by lowest h/highest g
 def a_star_search(problem):
     """A* uses estimated final cost heuristic f=g+h; can call
     as a special case of best-first-search"""
@@ -348,11 +371,9 @@ def a_star_search(problem):
 #Iterative-deepening-A*
 def ida_star_search(problem):
     f_cost = problem.h(Node(problem.initial))
-    #ngen,nexp,result,f_cost = limited_astar_search(problem,f_cost,1,0)
     ngen,nexp,result,f_cost = limited_astar_search(problem,f_cost,1)
     while True:
         ngen,nexp,result,f_cost = limited_astar_search(problem,f_cost,ngen)
-        #ngen,nexp,result,f_cost = limited_astar_search(problem,f_cost,ngen,nexp)
         if result != "cutoff":
             return ngen,nexp,result
 
@@ -361,24 +382,24 @@ def limited_astar_search(problem,cutoff,ngen):
     frontier = [root]
     path = set()
     next_cutoff = None
+    result = None
     while frontier:
         node = frontier.pop(0)
         if problem.goal_test(node.state):
             return ngen,len(path),node,cutoff
-            #return ngen,nexp+len(path),node,cutoff
         f_val = (problem.h(node)+node.g)
         if f_val > cutoff:
-            if next_cutoff is None:
-                next_cutoff = f_val
-            elif f_val < next_cutoff:
+            if next_cutoff is None or f_val < next_cutoff:
                 next_cutoff = f_val
             result = "cutoff"
+            path.discard(node.state)
         elif node.state not in path:
             for child in node.expand(problem):
                 frontier.insert(0,child)
                 ngen += 1
             path.add(node.state)
-    #return ngen,len(path)+nexp,result,next_cutoff
+        else:
+            path.discard(node.state)
     return ngen,len(path),result,next_cutoff
 
 # Greedy search
@@ -388,7 +409,7 @@ def greedy_search(problem):
     return best_first_search(problem,problem.h)
 
 
-#Algorithms from A1 - DFS and UCS
+#Old algorithms from A1 - DFS and UCS
 
 def depth_first_search(problem):
     ngenerated = 1
@@ -422,22 +443,21 @@ class PriorityQueue:
         self.heap = []
         self.nodes = set()
         self.f = eval_fn
-        self.counter = itertools.count() #tiebreak by counter to pop the most recent node if priorities are equal
     
     def push(self,node):
         """Add a node to the PQeue, or replace a higher-cost version"""
-        heapq.heappush(self.heap,(self.f(node),-next(self.counter),node))
+        heapq.heappush(self.heap,[self.f(node),node])
         self.nodes.add(node)
 
     def pop(self):
         """Remove and return the minimum node in the PQueue"""
-        self.nodes.discard(self.heap[0][2])
-        return heapq.heappop(self.heap)[2] 
+        self.nodes.discard(self.heap[0][1])
+        return heapq.heappop(self.heap)[1] 
 
     def __getitem__(self,node):
         """Override the list index operator to only search for the node, 
         not the tuple of (cost,node). Returns the cost"""
-        return next((v[0] for v in enumerate(self.heap) if v[2] == node), None)
+        return next((v[0] for v in enumerate(self.heap) if v[1] == node), None)
         
 
     def __delitem__(self,node):
@@ -447,7 +467,7 @@ class PriorityQueue:
             return
         def getIndex():
             for pos,t in enumerate(self.heap):
-                if t[2] == node:
+                if t[1] == node:
                     return pos
         idx = getIndex()
         self.heap.pop(idx)
